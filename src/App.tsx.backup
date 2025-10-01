@@ -1,7 +1,5 @@
 import { useState } from 'react';
 import { Cloud, Code2, MonitorSmartphone, Rocket, ShieldCheck, Sparkles, Stars, Wrench, Wallet, Users, Quote, CheckCircle2, ArrowRight, TrendingUp, Award, Clock, Target, Zap, Eye, MessageSquare, ChevronDown } from 'lucide-react';
-import { TestimonialsNew } from './components/TestimonialsNew';
-import { FAQSection } from './components/FAQSection';
 
 export default function App() {
   return (
@@ -14,8 +12,8 @@ export default function App() {
         <Process />
         <Portfolio />
         <Pricing />
-        <TestimonialsNew />
-        <FAQSection />
+        <Testimonials />
+        <FAQ />
         <Contact />
       </main>
       <Footer />
