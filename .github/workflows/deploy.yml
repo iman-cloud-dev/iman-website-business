@@ -1,0 +1,76 @@
+name: Build & Deploy
+
+permissions:
+  contents: read
+  packages: write
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v2
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push Docker image
+        env:
+          UUID: ${{ secrets.UUID }}
+        run: |
+          IMAGE=ghcr.io/$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')/next-site:$UUID
+          docker build -t $IMAGE .
+          docker push $IMAGE
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - name: Install cloudflared
+        run: |
+          curl -L https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 \
+          -o cloudflared
+          chmod +x cloudflared
+          sudo mv cloudflared /usr/local/bin/
+
+      - name: Add SSH key for deploy
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: |
+            ${{ secrets.SSH_PRIVATE_KEY }}
+          ssh-passphrase: ${{ secrets.SSH_PASSPHRASE }}
+
+      - name: Deploy on server via Cloudflare SSH
+        env:
+          CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+          CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+          SERVER_USER: ${{ secrets.SERVER_USER }}
+          UUID: ${{ secrets.UUID }}
+          PORT: ${{ secrets.PORT }}
+        run: |
+          IMAGE=ghcr.io/$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')/next-site:$UUID
+          ACTOR="${{ github.actor }}"
+          # Prefer a PAT if provided; fallback to GITHUB_TOKEN
+          REG_TOKEN="${{ secrets.GHCR_PAT }}"
+          if [ -z "$REG_TOKEN" ]; then REG_TOKEN="${{ secrets.GITHUB_TOKEN }}"; fi
+
+          ssh -o StrictHostKeyChecking=no \
+            -o ProxyCommand="cloudflared access ssh --hostname ssh.iman-cloud.net --id $CF_ACCESS_CLIENT_ID --secret $CF_ACCESS_CLIENT_SECRET" \
+            $SERVER_USER@ssh.iman-cloud.net \
+            "echo '$REG_TOKEN' | docker login ghcr.io -u $ACTOR --password-stdin && \
+             docker pull $IMAGE && \
+             docker stop next-site-$UUID || true && \
+             docker rm next-site-$UUID || true && \
+             docker run -d --name next-site-$UUID -p $PORT:3000 $IMAGE"
