@@ -1,8 +1,7 @@
-name: Build & Deploy
+name: Build & Deploy (No Docker)
 
 permissions:
   contents: read
-  packages: write
 
 on:
   push:
@@ -16,20 +15,34 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v2
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          node-version: '18'   # oder deine gewünschte Version
+          cache: 'npm'
 
-      - name: Build and push Docker image
-        env:
-          UUID: ${{ secrets.UUID }}
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build project
+        run: npm run build
+
+      - name: Verify build output
         run: |
-          IMAGE=ghcr.io/$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')/next-site:$UUID
-          docker build -t $IMAGE .
-          docker push $IMAGE
+          if [ ! -d "build" ]; then
+            echo "Error: build directory not found"
+            exit 1
+          fi
+          ls -la build/
+
+      - name: Archive build output
+        run: tar -czf build.tar.gz build/
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-output
+          path: build.tar.gz
 
   deploy:
     needs: build
@@ -38,39 +51,44 @@ jobs:
       contents: read
       packages: read
     steps:
+      - name: Checkout (for scripts)
+        uses: actions/checkout@v4
+
+      - name: Download build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: build-output
+          path: .
+
+      - name: Extract artifact
+        run: tar -xzf build.tar.gz
+
       - name: Install cloudflared
         run: |
           curl -L https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 \
-          -o cloudflared
+            -o cloudflared
           chmod +x cloudflared
           sudo mv cloudflared /usr/local/bin/
 
       - name: Add SSH key for deploy
         uses: webfactory/ssh-agent@v0.9.0
         with:
-          ssh-private-key: |
-            ${{ secrets.SSH_PRIVATE_KEY }}
-          ssh-passphrase: ${{ secrets.SSH_PASSPHRASE }}
+          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
 
-      - name: Deploy on server via Cloudflare SSH
+      - name: Deploy via SSH/rsync
         env:
           CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
           CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
           SERVER_USER: ${{ secrets.SERVER_USER }}
-          UUID: ${{ secrets.UUID }}
-          PORT: ${{ secrets.PORT }}
+          UUID: ${{ vars.UUID }}
+          PORT: ${{ vars.PORT }}
         run: |
-          IMAGE=ghcr.io/$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')/next-site:$UUID
-          ACTOR="${{ github.actor }}"
-          # Prefer a PAT if provided; fallback to GITHUB_TOKEN
-          REG_TOKEN="${{ secrets.GHCR_PAT }}"
-          if [ -z "$REG_TOKEN" ]; then REG_TOKEN="${{ secrets.GITHUB_TOKEN }}"; fi
-
           ssh -o StrictHostKeyChecking=no \
             -o ProxyCommand="cloudflared access ssh --hostname ssh.iman-cloud.net --id $CF_ACCESS_CLIENT_ID --secret $CF_ACCESS_CLIENT_SECRET" \
             $SERVER_USER@ssh.iman-cloud.net \
-            "echo '$REG_TOKEN' | docker login ghcr.io -u $ACTOR --password-stdin && \
-             docker pull $IMAGE && \
-             docker stop next-site-$UUID || true && \
-             docker rm next-site-$UUID || true && \
-             docker run -d --name next-site-$UUID -p $PORT:3000 $IMAGE"
+            "mkdir -p /var/www/$UUID"
+
+          # Dateien kopieren
+          rsync -avz --delete \
+            -e "ssh -o StrictHostKeyChecking=no -o ProxyCommand='cloudflared access ssh --hostname ssh.iman-cloud.net --id $CF_ACCESS_CLIENT_ID --secret $CF_ACCESS_CLIENT_SECRET'" \
+            build/ $SERVER_USER@ssh.iman-cloud.net:/var/www/$UUID/
