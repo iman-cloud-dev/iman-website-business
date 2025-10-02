@@ -82,13 +82,14 @@ jobs:
           SERVER_USER: ${{ secrets.SERVER_USER }}
           UUID: ${{ vars.UUID }}
           PORT: ${{ vars.PORT }}
+          REPO_NAME: ${{ github.event.repository.name }}
         run: |
           ssh -o StrictHostKeyChecking=no \
             -o ProxyCommand="cloudflared access ssh --hostname ssh.iman-cloud.net --id $CF_ACCESS_CLIENT_ID --secret $CF_ACCESS_CLIENT_SECRET" \
             $SERVER_USER@ssh.iman-cloud.net \
-            "mkdir -p /var/www/$UUID"
+            "mkdir -p /var/www/$UUID/$REPO_NAME"
 
           # Dateien kopieren
           rsync -avz --delete \
             -e "ssh -o StrictHostKeyChecking=no -o ProxyCommand='cloudflared access ssh --hostname ssh.iman-cloud.net --id $CF_ACCESS_CLIENT_ID --secret $CF_ACCESS_CLIENT_SECRET'" \
-            build/ $SERVER_USER@ssh.iman-cloud.net:/var/www/$UUID/
+            build/ $SERVER_USER@ssh.iman-cloud.net:/var/www/$UUID/$REPO_NAME/
